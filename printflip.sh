@@ -1,8 +1,9 @@
 # Bash script to print file to COEPrint
 # file is uploaded via scp in ~/print directory
 # file is then printed on COEPrint using a2ps
+# for ease of use, set up SSH keys on flip server
 
-#first paramter contains file to print. Do not incluse directory, simply './ printflip examplefile.c:'
+# first paramter contains file to print. Do not include directory, simply './ printflip examplefile.c:'
 
 # printflip.sh
 # Cody McCall
