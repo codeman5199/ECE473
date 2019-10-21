@@ -1,17 +1,25 @@
+#!/bin/bash
 # Bash script to print file to COEPrint
 # file is uploaded via scp in ~/print directory
 # file is then printed on COEPrint using a2ps
-# for ease of use, set up SSH keys on flip server
+# for best results, set up ssh keys on flip server
 
-# first paramter contains file to print. Do not include directory, simply './ printflip examplefile.c:'
+# first paramter contains name of file to print. Do not include directory, simply './ printflip examplefile.c:'
 
 # printflip.sh
 # Cody McCall
 # 10/14/2019
 
-user=""				#insert your username
+user="mccallco"				#insert your username
 printer="COEPrint"
 
-echo "Printing : $1 on $printer..."
-scp $pwd$1 $user@access.engr.oregonstate.edu:~/print
-ssh $user@access.engr.oregonstate.edu "a2ps -P $printer ~/print/$1"
+if  [ "$#" -ne 1 ]			#check that there is at least one argument passed into the script
+then
+echo "Error: No arg. No filename provided."
+exit 1
+fi
+
+filename=$1					#name of file to print
+echo "Printing : $filename on $printer..."
+scp $pwd$filename $user@access.engr.oregonstate.edu:~/print							#send to flip
+ssh $user@access.engr.oregonstate.edu "a2ps -P $printer ~/print/$filename"			#execute a2ps on flip servers
