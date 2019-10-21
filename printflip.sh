@@ -10,7 +10,7 @@
 # Cody McCall
 # 10/14/2019
 
-user="mccallco"				#insert your username
+user=""				#insert your username
 printer="COEPrint"
 
 if  [ "$#" -ne 1 ]			#check that there is at least one argument passed into the script
