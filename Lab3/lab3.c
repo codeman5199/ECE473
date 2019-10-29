@@ -1,6 +1,4 @@
-// lab2_skel.c 
-// R. Traylor
-// 9.12.08
+// lab3.c 
 
 //  HARDWARE SETUP:
 //  PORTA is connected to the segments of the LED display. and to the pushbuttons.
@@ -36,6 +34,28 @@ uint8_t dec_to_7seg[12] ={
 0b11111111,		//10 or blank
 };
 
+//******************************************************************************
+//							spi_init
+//Initialize SPI module in master mode, with low polarity, and MSB lsb format.
+//Additionally run at  i/o clock/2
+//
+void spi_init(){
+	DDRB |= 0x07;						//set MISO, MOSI, SCK, and SS to output
+	SPCR = (1<<SPE) | (1<<MSTR);		//SPI enable, master mode, low polarity, MSB lsb
+	SPSR = (1<<SPI2X);					//run at i/o clock/2
+}
+
+//******************************************************************************
+//							write_bargraph
+//Sends value to bargraph via SPI. Pass in data value to be written to bargraph.
+//Note MSB corresponds to bottom of bargraph.
+//
+void write_bargraph(uint8_t data){
+	SPDR = data;
+	while(bit_is_clear(SPSR,SPIF)) {}
+	PORTB = 1;
+	PORTB = 0;
+}
 
 //******************************************************************************
 //                            chk_buttons                                      

@@ -1,4 +1,6 @@
-PRG            =lab1_code
+#PRG            =lab3Bartest
+PRG            =lab3Quadtest
+#PRG            =lab3
 OBJ            = $(PRG).o
 
 MCU_TARGET     = atmega128
