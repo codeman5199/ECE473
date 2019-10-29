@@ -127,7 +127,7 @@ uint8_t main()
 {
 DDRB = 0xF0;
 static int count = 1;
-uint8_t digitCount = 0b0;
+uint8_t digitCount = 0;
 uint8_t bttnCount = 0;
 uint8_t press = FALSE;
 while(1){
@@ -148,7 +148,7 @@ while(1){
 	
 	if(count > 1023 | count < 0){count = 0;}		//keep in range 0-1023
 	segsum(count);									//load display array
-	if(digitCount == 5){digitCount= 0;}				//reset digit count to zero
+	if(digitCount == 6){digitCount= 0;}				//reset digit count to zero
 	DDRA = 0xFF;									//PORTA output mode
 	PORTA = dec_to_7seg[segment_data[digitCount]];	//send 7 segment code to LED segments
 	PORTB = (0 << PWM) | (digitCount << 4);			//send PORTB the digit to display
