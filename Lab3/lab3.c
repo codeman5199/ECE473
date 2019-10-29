@@ -1,10 +1,6 @@
 // lab3.c 
 
-//  HARDWARE SETUP:
-//  PORTA is connected to the segments of the LED display. and to the pushbuttons.
-//  PORTA.0 corresponds to segment a, PORTA.1 corresponds to segement b, etc.
-//  PORTB bits 4-6 go to a,b,c inputs of the 74HC138.
-//  PORTB bit 7 goes to the PWM transistor base.
+//Cody McCall
 
 #define F_CPU 16000000 // cpu speed in hertz 
 #define TRUE 		1
@@ -33,6 +29,8 @@ uint8_t dec_to_7seg[12] ={
 0b10011000,		//9
 0b11111111,		//10 or blank
 };
+
+uint8_t readFlag = 0;
 
 //******************************************************************************
 //							spi_init
@@ -107,6 +105,22 @@ void segsum(uint16_t sum) {
 }//segment_sum
 //***********************************************************************************
 
+int readButton(button){
+	//make PORTA an input port with pullups 
+	PORTA = 0xFF;				//turn off display and prep for pullup values
+	asm volatile("nop");
+	asm volatile("nop");
+	DDRA = 0x00;
+  	//enable tristate buffer for pushbutton switches
+	PORTB = (1 << PWM) | (BTTN_EN << 4);
+  	//now check button 1 and change mode if needed
+	for(uint8_t delay = 0; delay < 13; delay++){
+		if(chk_buttons(button)){
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
 
 //***********************************************************************************
 uint8_t main()
@@ -117,7 +131,28 @@ uint8_t digitCount = 0b0;
 uint8_t bttnCount = 0;
 uint8_t press = FALSE;
 while(1){
+
+	if(readFlag == 1 | readFlag == 3){
+		//quadread 1+2
+	}
+	else if(readFlag == 2){
+		if(readButton(1)){
+
+		}
+	}
+	else if(readFlag == 4){
+		if(readButton(2)){
+
+		}
+	}
 	
+	if(count > 1023 | count < 0){count = 0;}		//keep in range 0-1023
+	segsum(count);									//load display array
+	if(digitCount == 5){digitCount= 0;}				//reset digit count to zero
+	DDRA = 0xFF;									//PORTA output mode
+	PORTA = dec_to_7seg[segment_data[digitCount]];	//send 7 segment code to LED segments
+	PORTB = (0 << PWM) | (digitCount << 4);			//send PORTB the digit to display
+	digitCount++;									//update digit to display
 	//store count in display array
 	//limit display count by digits
 	//make PORTA output
