@@ -10,7 +10,15 @@
 #define BTTN_EN		7			//decoder value to enable button tristate buffer
 #define DISABLE		5			//unused decoder value to disable everything
 #include <avr/io.h>
+#include <avr/interrupt.h>
 #include <util/delay.h>
+
+static uint8_t readFlag = 0;
+
+ISR(TIMER0_OVF_vect){
+	readFlag++;								//increment readFlag on interrupt
+	if(readFlag == 3){readFlag = 0;}		//reset when get to 5
+}
 
 //holds data to be sent to the segments. logic zero turns segment on
 uint8_t segment_data[5]; 
@@ -30,7 +38,8 @@ uint8_t dec_to_7seg[12] ={
 0b11111111,		//10 or blank
 };
 
-uint8_t readFlag = 0;
+static int modeSum = 1;
+
 
 //******************************************************************************
 //							spi_init
@@ -51,8 +60,8 @@ void spi_init(){
 void write_bargraph(uint8_t data){
 	SPDR = data;
 	while(bit_is_clear(SPSR,SPIF)) {}
-	PORTB = 1;
-	PORTB = 0;
+	PORTB |= 1;
+	PORTB &= 0b11111110;
 }
 
 //******************************************************************************
@@ -65,9 +74,9 @@ void write_bargraph(uint8_t data){
 //external loop delay times 12. 
 //
 uint8_t chk_buttons(uint8_t button) {
-	static uint16_t state = 0; //holds present state
-	state = (state << 1) | (! bit_is_clear(PINA, button)) | 0xE000;
-	if (state == 0xF000) return 1;
+	static uint16_t state[8] = {0,0,0,0,0,0,0,0}; //holds present state, each button has it's own state
+	state[button] = (state[button] << 1) | (! bit_is_clear(PINA, button)) | 0xE000;			//shift in state of button pin to appropriate state variable
+	if (state[button] == 0xF000) return 1;
 	return 0;
 }
 //******************************************************************************
@@ -80,6 +89,14 @@ uint8_t chk_buttons(uint8_t button) {
 void segsum(uint16_t sum) {
 	uint8_t numDigits= 0;
 	uint8_t ones,tens,hundreds,thousands;
+	if(sum == 0){ 								//special case to display 0
+	segment_data[4] = BLANK;
+	segment_data[3] = BLANK;
+	segment_data[2] = BLANK;
+	segment_data[1] = BLANK;
+	segment_data[0] = 0;
+	return;
+	}
   //determine how many digits there are 
 	if(sum/1000 != 0){numDigits++;}     		//check if there is anything in the thousands place
 	if(sum/100 != 0){numDigits++;}				//check hundreds place
@@ -105,6 +122,10 @@ void segsum(uint16_t sum) {
 }//segment_sum
 //***********************************************************************************
 
+//***********************************************************************************
+//                                   readButton
+//read selected button for full debounce cycle. Button selected by changing button param
+//
 int readButton(button){
 	//make PORTA an input port with pullups 
 	PORTA = 0xFF;				//turn off display and prep for pullup values
@@ -114,7 +135,7 @@ int readButton(button){
   	//enable tristate buffer for pushbutton switches
 	PORTB = (1 << PWM) | (BTTN_EN << 4);
   	//now check button 1 and change mode if needed
-	for(uint8_t delay = 0; delay < 13; delay++){
+	for(uint8_t delay = 0; delay < 20; delay++){
 		if(chk_buttons(button)){
 			return TRUE;
 		}
@@ -122,84 +143,158 @@ int readButton(button){
 	return FALSE;
 }
 
+void setModeSum(int mode){
+	switch(mode){
+		case 0x00:
+			modeSum = 1;
+			break;
+		case 0x02:
+			modeSum = 2;
+			break;
+		case 0x04:
+			modeSum = 4;
+			break;
+		case 0x06:
+			modeSum = 0;
+			break;
+	}
+}
+
+//***********************************************************************************
+//                                   quad1Read
+//read left encoder and return pulse for each cw or ccw tick on encoder. Populate quad1_prev
+//and quad1_current before calling funciton. Returns 1 for ccw, 2 for cw and 0 for no turn.
+//
+int quad1Read(uint8_t quad1_prev, uint8_t quad1_current){
+	static int8_t count1;										//counter for quadrature edges
+	if(quad1_current == quad1_prev){							//no turn case
+		return 0;
+	}
+	switch(quad1_prev){											//compare previous measured quad value with current one
+		case 0b00:
+			if(quad1_current == 0b10){count1++;}				//ccw
+			else if(quad1_current == 0b01){count1--;}			//cw
+			break;
+		case 0b01:
+			if(quad1_current == 0b00){count1++;}				//ccw
+			else if(quad1_current == 0b11){count1--;}			//cw
+			break;
+		case 0b10:
+			if(quad1_current == 0b11){count1++;}				//ccw
+			else if(quad1_current == 0b00){count1--;}			//cw
+			break;
+		case 0b11:
+			if(quad1_current == 0b01){count1++;}				//ccw
+			else if(quad1_current == 0b10){count1--;}			//cw
+			break;
+	}	
+	if(count1 == 4){											//count 4 edges for one tick
+		count1 = 0;												//reset counter
+		return 1;												//return 1 for ccw
+	}
+	else if(count1 == -4){										//count 4 edges for one tick
+		count1 = 0;												//reset counter
+		return 2;												//return 2 for cw
+	}
+}
+
+int quad2Read(uint8_t quad2_prev, uint8_t quad2_current){
+	static int8_t count2;
+	if(quad2_current == quad2_prev){
+		return 0;
+	}
+	switch(quad2_prev){								//compare previous measured quad value with current one
+		case 0b00:
+			if(quad2_current == 0b10){count2++;}				//ccw
+			else if(quad2_current == 0b01){count2--;}			//cw
+			break;
+		case 0b01:
+			if(quad2_current == 0b00){count2++;}				//ccw
+			else if(quad2_current == 0b11){count2--;}			//cw
+			break;
+		case 0b10:
+			if(quad2_current == 0b11){count2++;}				//ccw
+			else if(quad2_current == 0b00){count2--;}			//cw
+			break;
+		case 0b11:
+			if(quad2_current == 0b01){count2++;}				//ccw
+			else if(quad2_current == 0b10){count2--;}			//cw
+			break;
+	}	
+	if(count2 == 4){
+		count2 = 0;	
+		return 1;
+	}
+	else if(count2 == -4){
+		count2 = 0;	
+		return 2;
+	}
+}
+
 //***********************************************************************************
 uint8_t main()
 {
-DDRB = 0xF0;
+DDRB = 0xFF;
+DDRE = 0xC0;
+PORTE = 0b11000000;
+TIMSK |= (1<<TOIE0);             //enable interrupts
+TCCR0 |= (1<<CS02) | (1<<CS00);  //normal mode, prescale by 128
+uint8_t quad1_prev = 0;
+uint8_t quad1_current = 0;
+uint8_t quad2_prev = 0;
+uint8_t quad2_current = 0;
+int mode = 0;
+int turn = 0;
+int data = 0;
 static int count = 1;
 uint8_t digitCount = 0;
-uint8_t bttnCount = 0;
-uint8_t press = FALSE;
+spi_init();
+sei();
 while(1){
 
-	if(readFlag == 1 | readFlag == 3){
+	//if((readFlag == 1) | (readFlag == 3)){
+	if((readFlag == 1) ){
 		//quadread 1+2
+		PORTE = 0b01000000;							//toggle SDLD and CLK_INH
+		SPDR = 0x00;								//write garbage
+		while(bit_is_clear(SPSR, SPIF)){}			//spin until complete
+		quad1_prev = quad1_current;					//set previous value to current
+		quad2_prev = quad2_current;					//set previous value to current
+		data = SPDR;								//read new current value
+		quad1_current = (data & 0x03);				//parse new value
+		quad2_current = (data & 0x0C)>>2;				//parse new value
+		turn = quad1Read(quad1_prev, quad1_current);//eval state machine
+		if(turn == 1){count = count + modeSum;}
+		if(turn == 2){count = count - modeSum;}
+		turn = quad2Read(quad2_prev, quad2_current);//eval state machine
+		if(turn == 1){count = count + modeSum;}
+		if(turn == 2){count = count - modeSum;}
+		//if(turn == 1){write_bargraph(1);}
+		//if(turn == 2){write_bargraph(2);}
+		PORTE = 0b10000000;
 	}
 	else if(readFlag == 2){
-		if(readButton(1)){
-
+		if(readButton(0)){
+			mode ^= 0x02;
+		//	setModeSum(mode, modeSum);
 		}
-	}
-	else if(readFlag == 4){
-		if(readButton(2)){
-
+	//}
+	//else if(readFlag == 4){
+		else if(readButton(1)){
+			mode ^= 0x04;
 		}
+		write_bargraph(mode);	
+		setModeSum(mode);
 	}
 	
-	if(count > 1023 | count < 0){count = 0;}		//keep in range 0-1023
+	if(count > 1023){count = 0;}					//keep in range 0-1023
+	if(count < 0){count = 1023;}					//keep in range 0-1023
 	segsum(count);									//load display array
 	if(digitCount == 6){digitCount= 0;}				//reset digit count to zero
 	DDRA = 0xFF;									//PORTA output mode
 	PORTA = dec_to_7seg[segment_data[digitCount]];	//send 7 segment code to LED segments
 	PORTB = (0 << PWM) | (digitCount << 4);			//send PORTB the digit to display
 	digitCount++;									//update digit to display
-	//store count in display array
-	//limit display count by digits
-	//make PORTA output
-	//send values to display
-	//send PORTB digit to display
-	//update display digit
 
-	/*
-  //insert loop delay for debounce
-  //make PORTA an input port with pullups 
-	PORTA = 0xFF;				//turn off display and prep for pullup values
-	asm volatile("nop");
-	asm volatile("nop");
-	DDRA = 0x00;
-  //enable tristate buffer for pushbutton switches
-	PORTB = (1 << PWM) | (BTTN_EN << 4);
-  //now check each button and increment the count as needed
-	for(uint8_t delay = 0; delay < 13; delay++){
-		if(chk_buttons(bttnCount)){
-			press = TRUE;
-		}
-	}
-	if(press == TRUE){
-		//do thing depending on bttnCount
-		count++;
-	}
-	press = FALSE;
-  //disable tristate buffer for pushbutton switches
-	PORTB = (1 << PWM) | (DISABLE << 4);
-  //bound the count to 0 - 1023
-	if((count == 1023) | (count == 0)){
-		asm volatile("nop");
-	}
-  //break up the disp_value to 4, BCD digits in the array: call (segsum)
-	segsum(count);
-  //bound a counter (0-4) to keep track of digit to display 
-	if(digitCount == 5){digitCount= 0;}				//reset digit count to zero
-	if(bttnCount == 7){bttnCount= 0;}				//reset digit count to zero
-  //make PORTA an output
-	DDRA = 0xFF;
-  //send 7 segment code to LED segments
-	PORTA = dec_to_7seg[segment_data[digitCount]];	
-  //send PORTB the digit to display
-	PORTB = (0 << PWM) | (digitCount << 4);
-  //update digit to display
-	digitCount++;
-	bttnCount++;
-	*/
   }//while
 }//main
