@@ -40,9 +40,15 @@ uint8_t secs = 0;
 uint8_t secsCount = 0;
 uint8_t blink = 0;
 static int count = 1;				//count displayed on seven seg
+uint8_t alarm = FALSE;				//state of alarm
+uint8_t active_volume = 0x70;		//active volume
+uint8_t idle_volume = 0xF0;			//idle volume
 
-char lcd_str[16] = {'A', 'L', 'A', 'R', 'M'};  //holds string to send to lcd 
-char lcd_str2[16] = {'B', 'E', 'E', 'P'};  //holds string to send to lcd  
+
+char lcd_armed[16] = {'A', 'R', 'M', 'E', 'D', ' '};  //holds string to send to lcd 
+char lcd_beep[16] = {'B', 'E', 'E', 'P'};  //holds string to send to lcd  
+char lcd_snooze[16] = {'S', 'N', 'O', 'O', 'Z', 'E'};  //holds string to send to lcd 
+char lcd_trigger[16];
 
 //******************************************************************************
 //							button_read
@@ -50,7 +56,6 @@ char lcd_str2[16] = {'B', 'E', 'E', 'P'};  //holds string to send to lcd
 //this is only to be edited within the TIMER0_OVF_vect ISR.
 //
 static uint8_t button_read = 0;	
-
 
 //holds data to be sent to the segments. logic zero turns segment on
 uint8_t segment_data[5]; 
@@ -72,13 +77,6 @@ uint8_t dec_to_7seg[14] ={
 0b11111000,     //12 or colon on (PM)
 0b11111011, 	//13 or blank (PM)
 };
-
-//holds value to be added to count on encoder turn (default is 1)
-static int modeSum = 1;
-
-ISR(TIMER2_COMP_VECT){
-	PORTB ^= (1<<PWM);
-}
 
 
 //******************************************************************************
@@ -166,7 +164,8 @@ void segsum(uint16_t sum) {
 }//segment_sum
 
 //******************************************************************************
-
+//									updateTime
+//update the current minutes, seconds, and hours
 void updateTime(){
     if(secs >=60){                              //add minute after 60 seconds
         mins++;
@@ -218,7 +217,7 @@ void segsumAlarm(){
 //                                   readButton
 //read selected button for full debounce cycle. Button selected by changing button param.
 //
-int readButton(button){
+int readButton(uint8_t button){
 	//make PORTA an input port with pullups 
 	PORTA = 0xFF;				//turn off display and prep for pullup values
 	asm volatile("nop");
@@ -275,6 +274,7 @@ int quad1Read(uint8_t quad1_prev, uint8_t quad1_current){
 		count1 = 0;											//reset counter
 		return 2;											//return 2 for cw
 	}
+	return 0;
 }
 
 //***********************************************************************************
@@ -317,6 +317,7 @@ int quad2Read(uint8_t quad2_prev, uint8_t quad2_current){
 		count2 = 0;											//reset counter
 		return 2;											//return 2 for cw
 	}
+	return 0;
 }
 
 //***********************************************************************************
@@ -325,7 +326,7 @@ int quad2Read(uint8_t quad2_prev, uint8_t quad2_current){
 //	TRUTH TABLE:	| mode val	| operation  |
 //					|  0x01 	|	+/-mins	 |
 //					|  0x02 	|	+/-hours |
-incSetTime(){
+void incSetTime(){
     switch(mode){							//change minutes or hours depending on mode
 		case (1<<SETMINS):					//set minutes mode
 			mins++;							//increment minutes
@@ -362,7 +363,7 @@ incSetTime(){
 //	TRUTH TABLE:	| mode val	| operation  |
 //					|  0x01 	|	+/-mins	 |
 //					|  0x02 	|	+/-hours |
-decSetTime(){
+void decSetTime(){
 	switch(mode){						//change minutes or hours depending on mode
 		case 0x01:						//set minutes mode
             if(mins == 0){				//underflow back to 0
@@ -393,12 +394,46 @@ decSetTime(){
 	}
 }
 
+void incdec_vol(uint8_t dir){
+	static uint8_t count = 0x07;
+	switch(dir){
+		case 0:
+			if(count < 0x0F){
+				count++;
+				//write_bargraph(count);
+				active_volume = (count << 4);
+			}
+		break;
+		case 1:
+			if(count > 0x04){
+				count--;
+				//write_bargraph(count);
+				active_volume = (count << 4);
+			}
+		break;
+
+	}
+}
+
+//******************************************************************************
+//							TIMER1_OVF_vect ISR
+//ISR outputs sound if alarm is enabled to PD4. Sound is 5Vpp
+//
+ISR(TIMER1_OVF_vect){
+    if(1){PORTD ^= (1<<PD4);}
+}
+
 //******************************************************************************
 //							TIMER0_OVF_vect ISR
 //ISR checks all inputs and reacts accordingly. Read each encoder and one button every
 //cycle. Buttons are all checked with button_read variable
 //
 ISR(TIMER0_OVF_vect){
+	ADCSRA |= (1<<ADSC);
+	while(bit_is_clear(ADCSRA, ADIF)){}
+	ADCSRA ^= (1<<ADIF);
+	OCR2 = ~(ADC/4) + 0;
+
 	//*****track/display time*****//
     if(!(mode & 0x07)){                    //normal time display
         secsCount++;
@@ -422,10 +457,10 @@ ISR(TIMER0_OVF_vect){
             secsCount = 0;
         }
 	}
-	if((mode == (1<<ARMALARM)) && (armed == FALSE)){
+	if((mode == (1<<ARMALARM)) && (armed != TRUE)){
 		armed = TRUE;
 	}
-    if((mode == 0x01) | mode == 0x02){
+    if((mode == 0x01) | (mode == 0x02)){
         segsumTime();
     }
 
@@ -433,15 +468,17 @@ ISR(TIMER0_OVF_vect){
 	PORTE = 0b01000000;								//toggle SDLD and CLK_INH
     SPDR = 0x00;									//write garbage over SPI
 	while(bit_is_clear(SPSR, SPIF)){}				//spin until transmission complete
-	quad1_prev = quad1_current;					//set previous value to current
+	quad1_prev = quad1_current;						//set previous value to current
 	quad2_prev = quad2_current;						//set previous value to current
 	data = SPDR;									//read new current value
-	quad1_current = (data & 0x03);				//mask out all bits except 0 and 1
+	quad1_current = (data & 0x03);					//mask out all bits except 0 and 1
 	quad2_current = ((data & 0x0C)>>2);				//mask out all bits except 2 and 3, then shift right by 2
 	turn = quad1Read(quad1_prev, quad1_current);	//eval state of encoder 1
-	//turn = quad2Read(quad2_prev, quad2_current);	//eval state of encoder 2
 	if(turn == 1){incSetTime();}					//if turning ccw, inc
 	if(turn == 2){decSetTime();}					//if turning cw, dec
+	turn = quad2Read(quad2_prev, quad2_current);	//eval state of encoder 2
+	if(turn == 1){incdec_vol(0);}					//if turning ccw, inc
+	if(turn == 2){incdec_vol(1);}					//if turning cw, dec
 	PORTE = 0b10000000;								//toggle SDLD and CLK_INH
 	
     //read buttons
@@ -454,26 +491,44 @@ ISR(TIMER0_OVF_vect){
         button_read = 0;
 }
 
+//Operation Modes:
+// 0x01;
+
 //***********************************************************************************
 uint8_t main()
 {
-
 //*****initialization*****//
-DDRB = 0xFF;						//PORTB set all outputs
-DDRE = 0xC0;						//PORTE set outputs for bits 7 and 6
-PORTE = (1<<SH_LD) | (1<<CLK_INH);	//init encoder SH/LD and CLK_INH high
-TIMSK |= (1<<TOIE0) /*| (1<<TOIE2)*/;   //enable interrupts
-ASSR  |= (1<<AS0);                  //use ext oscillator
-TCCR0 |= (1<<CS00);  	            //normal mode, no prescale
+DDRB = 0xFF;							//PORTB set all outputs (display decoder and SPI)
+DDRE = (1<<PE3)| (1<<PE6) | (1<<PE7);	//PORTE set outputs for bits 3 (Volume), 6 (SHLD), and 7 (CLK_INH)
+DDRD = (1<<PD4);						//PORTD set ouput for bit 4 (alarm sound)
+DDRF &= ~(1<<PF7);
+PORTF &= ~(1<<PF7);
+PORTE = (1<<SH_LD) | (1<<CLK_INH);		//init encoder SH/LD and CLK_INH high
+//Timer Int vectors used: TIMER0_OVF, TIMER1_OVF
+TIMSK |= (1<<TOIE0) | (1<<TOIE1);   	//enable interrupts
+//Input control: normal mode, ext osc, no prescale
+ASSR  |= (1<<AS0);                  	//use ext oscillator
+TCCR0 |= (1<<CS00);  	            	//normal mode, no prescale
+//Brightness control: fast PWM, 1024 prescale, ouput on OC2
 TCCR2 |= (1<<WGM21) | (1<<WGM20) | (1<<COM21) | (1<<COM20) | (1<<CS20) | (1<<CS22);   //fast PWM mode, 1024 prescale
-TCCR1A = 0x00;                  	//normal mode
-TCCR1B = (1<<CS11) | (1<<CS10); 	//use clk/64
-TCCR1C = 0x00;                  	//no forced compare
+//Sound generation: normal mode no prescale, flip PE3 on OVF interrupt
+TCCR1A = 0x00;                  					//normal mode
+TCCR1B = (1<<CS10); 	        					//use no prescale clk/1
+TCCR1C = 0x00;                  					//no force compare
+//Volume control: fast pwm, set on match, clear at top, ICR1 holds TOP 
+TCCR3A |= (1<<COM3A1) | (1<<COM3A0) | (1<<WGM31);   //use ICR1 as source for TOP, use clk/1
+TCCR3B |= (1<<WGM33) | (1<< WGM32) | (1<<CS30); 	//no forced compare 
+TCCR3C = 0x00;                                    	//
+ICR3  = 0x00FF; 									//clear at 0x00FF
+//Brightness control: ADC single ended
+ADMUX = 0x47;				//single ended, input PF7, right adjusted, 10 bits
+ADCSRA = (1 << ADEN) | (0 << ADSC) | (1<< ADPS2) | (1 << ADPS1) | (1 <<ADPS0);
+
 uint8_t digitCount = 0;				//tracks digit to display
-uint8_t alarm = FALSE;
-uint8_t trigger_hours;
-uint8_t trigger_mins;
-uint8_t trigger_am_pm;
+uint8_t trigger_hours = 0;
+uint8_t trigger_mins = 0;
+uint8_t trigger_secs = 0;
+uint8_t trigger_am_pm = 0;
 spi_init();							//initialize SPI
 lcd_init();
 clear_display();
@@ -485,39 +540,71 @@ alarm_hours = 7;
 alarm_mins = 30;
 segment_data[2] = BLANK;
 OCR2 = 250;
+OCR3A = idle_volume;				//set inital volume
 while(1){
-	//check alarm
-	if(armed == 1){
-		armed++;
-		clear_display();
-		string2lcd(lcd_str);
-		trigger_hours = alarm_hours;
-		trigger_mins = alarm_mins;
-		trigger_am_pm = alarm_am_pm;
+	
+	//*****brightness control*****//
+	/*
+	ADCSRA |= (1<<ADSC);
+	while(bit_is_clear(ADCSRA, ADIF)){}
+	ADCSRA ^= (1<<ADIF);
+	OCR2 = ~(ADC/4) + 25;
+	clear_display();
+	sprintf(lcd_trigger, "%d",ADC);
+	string2lcd(lcd_trigger);*/
+	
+
+	//*****alarm control*****//
+	if(armed == 1){								//arm the alarm
+		armed++;								//move to armed and trigger set
+		clear_display();						//clear display
+		string2lcd(lcd_armed);					//write armed to display
+		trigger_hours = alarm_hours;			//set trigger hours
+		trigger_mins = alarm_mins;				//set trigger minutes
+		//parse trigger time to lcd
+		sprintf(lcd_trigger, "%d%d:%d%d", trigger_hours/10, trigger_hours%10, trigger_mins/10, trigger_mins%10);
+		string2lcd(lcd_trigger);				//write to lcd
+		trigger_am_pm = alarm_am_pm;			//set trigger am/pm
+		trigger_secs = 0;						//set trigger seconds
+		mode &= ~(1<<ARMALARM);					//reset mode to confirm arming
 	}
-	if((armed) && (hours == trigger_hours) && (mins == trigger_mins) && (am_pm == trigger_am_pm)){	//condition to trigger alarm
-		if((mode & 0x80)){
+	if((armed) && (hours == trigger_hours) && (mins == trigger_mins) && (am_pm == trigger_am_pm) && (secs == trigger_secs)){	//condition to trigger alarm
+		/*if((mode & 0x80)){
 			alarm_mins = (alarm_mins + 10) % 60;
 		}
-		else{
+		else{*/
 			clear_display();
-			string2lcd(lcd_str2);
+			string2lcd(lcd_beep);
 			armed = FALSE;
 			snooze = FALSE;
 			mode &= ~(1<< SNOOZE);
 			alarm = TRUE;
 			trigger_hours = 0;
 			trigger_mins = 0;
+			trigger_secs = 0;
 			trigger_am_pm = 0;
-		}
+		//}
 	}
 	if(alarm){
+		OCR3A = active_volume;
 		if((mode & 0x80) && !snooze){
-			alarm_mins = (alarm_mins + 10) % 60;
+			clear_display();
+			string2lcd(lcd_snooze);
+			trigger_hours = hours;
+			trigger_mins = mins;
+			trigger_secs = secs + 10;
+			trigger_am_pm = am_pm;
+			//alarm_mins = (alarm_mins + 10) % 60;
+			alarm = FALSE;
+			OCR3A = idle_volume;
+			armed = 2;
+			mode &= ~(1<< SNOOZE);
 		}
-		if(TIFR & (1<<TOV1)){
-			TIFR  |= (1<<TOV1);     //clear it by writing a one to TOV1 
-			//toggle alarm bit PORTX^= (1<<X)
+		if(mode & 0x40){
+			clear_display();
+			alarm = FALSE;
+			OCR3A = idle_volume;
+			mode ^= (0x40);
 		}
 	}
 	
@@ -529,7 +616,7 @@ while(1){
 	//segsumTime();                                       //load display array with time
     if(digitCount == 6){digitCount= 0;}					//reset digit count to zero
 	DDRA = 0xFF;										//PORTA output mode
-    _delay_us(100);
+    _delay_us(10);
 	PORTA = dec_to_7seg[segment_data[digitCount]];		//send 7 segment code to LED segments
 	PORTB = (0 << PWM) | (digitCount << 4);				//send PORTB the digit to display
 	digitCount++;										//update digit to display
