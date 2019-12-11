@@ -2,13 +2,15 @@
 #include <avr/interrupt.h>
 #include <util/delay.h>
 #include "lm73_functions.h"
-#define RX_CMD  'r'
+#define TEMP_CMD  'r'
 
 char command;
 uint8_t getTemp = 0;
+uint16_t tempval;
+char tx_buf_to128[16];
 
 int verify_command(char data){
-    if(data == RX_CMD){return 1;}
+    if(data == TEMP_CMD){return 1;}
     else {return 0;}
 }
 
@@ -31,10 +33,11 @@ uint8_t main(){
     uint8_t Temp;
     while(1){
         if(getTemp){
-            twi_start_rd(TEMP_ADDR, &Temp, 1);          //read temp over TWI
-            lm73_temp_convert(char temp_digits[], Temp, uint8_t f_not_c)
+            tempval = lm73_temp_read();
+            lm73_temp_convert(tx_buf_to128, tempval, 0);
             getTemp = 0;
             //report to 128
+            uart_puts(tx_buf_to128);
         }
     }
 }

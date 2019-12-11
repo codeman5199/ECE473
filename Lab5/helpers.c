@@ -1,93 +1,7 @@
-// lab4.c 
 
-//Cody McCall
-// 10/11/2019
-
-#define F_CPU 16000000 // cpu speed in hertz 
-#define TRUE 		1
-#define FALSE 		0
-#define BLANK		10			//blank digit is represented by the value ten
-#define COLON_ON	11			//colon on is represented by the value eleven
-#define PWM			7			//pwm pin 7 on PORTB
-#define BTTN_EN		7			//decoder pin cpnnected to enable of tristate buffer
-#define DISABLE		5			//unused decoder value for disabling
-#define SH_LD		6			//SH/LD pin 6 on PORTE
-#define CLK_INH		7			//CLK_INH pin 7 on PORTE
-#define SETMINS		0
-#define	SETHOURS	1
-#define DISP_TOGGLE	2
-#define ARMALARM	3
-#define SNOOZE		7
-#define TEMP_CMD	'r'
-#include <avr/io.h>
-#include <avr/interrupt.h>
-#include <util/delay.h>
-#include "hd44780.h"
-#include "lm73_functions.h"
-#include "uart_functions.h"
-
-uint8_t quad1_prev = 0;				//state values for encoders 1 and 2
-uint8_t quad1_current = 0;			//
-uint8_t quad2_prev = 0;				//
-uint8_t quad2_current = 0;			//
-uint8_t snooze = FALSE;
-uint8_t armed = FALSE;
-uint8_t mode = 0;					//holds current inc/dec mode
-uint8_t turn = 0;					//temp variable for turn direction
-uint8_t data = 0;					//temp valriable for read SPI data
-uint8_t alarm_hours, alarm_mins;    //variable for alarm hours and minutes
-uint8_t hours, mins;                //variable for hours and minutes
-uint8_t am_pm = 0; 					//state of time, AM or PM. 0 for AM, 1 for PM
-uint8_t alarm_am_pm = 0; 			//state of time, AM or PM. 0 for AM, 1 for PM
-uint8_t secs = 0; 
-uint8_t secsCount = 0;
-uint8_t blink = 0;
-static int count = 1;				//count displayed on seven seg
-uint8_t alarm = FALSE;				//state of alarm
-uint8_t active_volume = 0x70;		//active volume
-uint8_t idle_volume = 0xF0;			//idle volume
-uint8_t temp_flag;
-char rx_buf;
-uint8_t rx_count = 0;
-
-
-char lcd_armed[16] = {'A', 'R', 'M', 'E', 'D', ' '};  //holds string to send to lcd 
-char lcd_beep[16] = {'B', 'E', 'E', 'P'};  //holds string to send to lcd  
-char lcd_snooze[16] = {'S', 'N', 'O', 'O', 'Z', 'E'};  //holds string to send to lcd 
-char lcd_trigger[16];
-char lcd_temp_local[16];
-char lcd_temp_remote[16] = {'0', '0', 'C'};
-
-uint8_t lm73_write_buf[2];
-uint8_t lm73_read_buf[2];
-//******************************************************************************
-//							button_read
-//flag to control which button is being polled at any time in the ISR
-//this is only to be edited within the TIMER0_OVF_vect ISR.
-//
-static uint8_t button_read = 0;	
-
-//holds data to be sent to the segments. logic zero turns segment on
-uint8_t segment_data[5]; 
-
-//decimal to 7-segment LED display encodings, logic "0" turns on segment
-uint8_t dec_to_7seg[14] ={
-0b11000000,		//0
-0b11111001,		//1
-0b10100100,		//2
-0b10110000,		//3
-0b10011001,		//4
-0b10010010,		//5
-0b10000010,		//6
-0b11111000,		//7
-0b10000000,		//8
-0b10011000,		//9
-0b11111111,		//10 or blank (AM)
-0b11111100,     //11 or colon on (AM)
-0b11111000,     //12 or colon on (PM)
-0b11111011, 	//13 or blank (PM)
-};
-
+#ifndef HELPERS_H
+#include "helpers.h"
+#endif
 
 //******************************************************************************
 //							spi_init
@@ -425,73 +339,8 @@ void incdec_vol(uint8_t dir){
 	}
 }
 
-void updateTempDisplay(){
-    for(int i = 0; i < 8; i++){
-
-    }
-}
-
-//******************************************************************************
-//							TIMER1_OVF_vect ISR
-//ISR outputs sound if alarm is enabled to PD4. Sound is 5Vpp
-//
-ISR(TIMER1_OVF_vect){
-    if(1){PORTD ^= (1<<PD4);}
-}
-
-ISR(USART_RX_VECT){
-    rx_buf = UDR0;
-	if(rx_buf == '.'){
-		rx_count = 0;
-	}
-	else{
-		lcd_temp_remote[rx_count] = rx_buff;
-	}
-}
-
-//******************************************************************************
-//							TIMER0_OVF_vect ISR
-//ISR checks all inputs and reacts accordingly. Read each encoder and one button every
-//cycle. Buttons are all checked with button_read variable
-//
-ISR(TIMER0_OVF_vect){
-	ADCSRA |= (1<<ADSC);
-	while(bit_is_clear(ADCSRA, ADIF)){}
-	ADCSRA ^= (1<<ADIF);
-	OCR2 = ~(ADC/4) + 0;
-
-	//*****track/display time*****//
-    if(!(mode & 0x07)){                    //normal time display
-        secsCount++;
-        if(secsCount == 64){
-            segment_data[2] = (BLANK + (am_pm*3));
-        }
-        if(secsCount == 129){
-            secs++;
-			updateTime();
-            segsumTime();
-            temp_flag = 1;
-            secsCount = 0;
-        }
-    }
-	if((mode == 0x04) | (mode == 0x05) | (mode == 0x06)){
-		secsCount++;
-		if(secsCount % 2)
-        	segsumAlarm();			
-        if(secsCount == 129){
-            secs++;
-			updateTime();
-            secsCount = 0;
-        }
-	}
-	if((mode == (1<<ARMALARM)) && (armed != TRUE)){
-		armed = TRUE;
-	}
-    if((mode == 0x01) | (mode == 0x02)){
-        segsumTime();
-    }
-
-	//*****check inputs*****//
+void readInputs(){
+    //*****check inputs*****//
 	PORTE = 0b01000000;								//toggle SDLD and CLK_INH
     SPDR = 0x00;									//write garbage over SPI
 	while(bit_is_clear(SPSR, SPIF)){}				//spin until transmission complete
@@ -518,150 +367,21 @@ ISR(TIMER0_OVF_vect){
         button_read = 0;
 }
 
-//Operation Modes:
-// 0x01;
-
-//***********************************************************************************
-uint8_t main()
-{
-//*****initialization*****//
-DDRB = 0xFF;							//PORTB set all outputs (display decoder and SPI)
-DDRE = (1<<PE3)| (1<<PE6) | (1<<PE7);	//PORTE set outputs for bits 3 (Volume), 6 (SHLD), and 7 (CLK_INH)
-DDRD = (1<<PD4);						//PORTD set ouput for bit 4 (alarm sound)
-DDRF &= ~(1<<PF7);
-PORTF &= ~(1<<PF7);
-PORTE = (1<<SH_LD) | (1<<CLK_INH);		//init encoder SH/LD and CLK_INH high
-//Timer Int vectors used: TIMER0_OVF, TIMER1_OVF
-TIMSK |= (1<<TOIE0) | (1<<TOIE1);   	//enable interrupts
-//Input control: normal mode, ext osc, no prescale
-ASSR  |= (1<<AS0);                  	//use ext oscillator
-TCCR0 |= (1<<CS00);  	            	//normal mode, no prescale
-//Brightness control: fast PWM, 1024 prescale, ouput on OC2
-TCCR2 |= (1<<WGM21) | (1<<WGM20) | (1<<COM21) | (1<<COM20) | (1<<CS20) | (1<<CS22);   //fast PWM mode, 1024 prescale
-//Sound generation: normal mode no prescale, flip PE3 on OVF interrupt
-TCCR1A = 0x00;                  					//normal mode
-TCCR1B = (1<<CS10); 	        					//use no prescale clk/1
-TCCR1C = 0x00;                  					//no force compare
-//Volume control: fast pwm, set on match, clear at top, ICR1 holds TOP 
-TCCR3A |= (1<<COM3A1) | (1<<COM3A0) | (1<<WGM31);   //use ICR1 as source for TOP, use clk/1
-TCCR3B |= (1<<WGM33) | (1<< WGM32) | (1<<CS30); 	//no forced compare 
-TCCR3C = 0x00;                                    	//
-ICR3  = 0x00FF; 									//clear at 0x00FF
-//Brightness control: ADC single ended
-ADMUX = 0x47;				//single ended, input PF7, right adjusted, 10 bits
-ADCSRA = (1 << ADEN) | (0 << ADSC) | (1<< ADPS2) | (1 << ADPS1) | (1 <<ADPS0);
-
-uint8_t digitCount = 0;				//tracks digit to display
-uint8_t trigger_hours = 0;
-uint8_t trigger_mins = 0;
-uint8_t trigger_secs = 0;
-uint8_t trigger_am_pm = 0;
-uint16_t tempval;
-spi_init();							//initialize SPI
-lcd_init();                         //initialize LCD
-init_twi();                         //initalize TWI
-lm73_temp_init();                   //initalize lm73 temp sensor
-uart_init();						//initalize uart with interrupts
-clear_display();
-sei();								//enable interrupts
-hours = 1;
-mins = 0;
-am_pm = 1;
-alarm_hours = 7;
-alarm_mins = 30;
-segment_data[2] = BLANK;
-OCR2 = 250;
-OCR3A = idle_volume;				//set inital volume
-while(1){
-	if(temp_flag == 1){
-		tempval = lm73_temp_read();
-        set_cursor(2, 0);								//note to self: placing this after the converstaion funcion call causes bug where tens place of temp gets cut off  
-		lm73_temp_convert(lcd_temp_local, tempval, 0);//read local temperature
-        //update lcd
-        string2lcd(lcd_temp_local);
-        set_cursor(2, 5);
-        string2lcd(lcd_temp_remote);
-		//send command for remote temperature
-		uart_putc(TEMP_CMD);
-        temp_flag = 0;
-    }
-	//*****brightness control*****//
-	/*
-	ADCSRA |= (1<<ADSC);
-	while(bit_is_clear(ADCSRA, ADIF)){}
-	ADCSRA ^= (1<<ADIF);
-	OCR2 = ~(ADC/4) + 25;
-	clear_display();
-	sprintf(lcd_trigger, "%d",ADC);
-	string2lcd(lcd_trigger);*/
-	
-
-	//*****alarm control*****//
-	if(armed == 1){								//arm the alarm
-		armed++;								//move to armed and trigger set
-		clear_display();						//clear display
-		string2lcd(lcd_armed);					//write armed to display
-		trigger_hours = alarm_hours;			//set trigger hours
-		trigger_mins = alarm_mins;				//set trigger minutes
-		//parse trigger time to lcd
-		sprintf(lcd_trigger, "%d%d:%d%d", trigger_hours/10, trigger_hours%10, trigger_mins/10, trigger_mins%10);
-		string2lcd(lcd_trigger);				//write to lcd
-		trigger_am_pm = alarm_am_pm;			//set trigger am/pm
-		trigger_secs = 0;						//set trigger seconds
-		mode &= ~(1<<ARMALARM);					//reset mode to confirm arming
-	}
-	if((armed) && (hours == trigger_hours) && (mins == trigger_mins) && (am_pm == trigger_am_pm) && (secs == trigger_secs)){	//condition to trigger alarm
-		/*if((mode & 0x80)){
-			alarm_mins = (alarm_mins + 10) % 60;
-		}
-		else{*/
-			clear_display();
-			string2lcd(lcd_beep);
-			armed = FALSE;
-			snooze = FALSE;
-			mode &= ~(1<< SNOOZE);
-			alarm = TRUE;
-			trigger_hours = 0;
-			trigger_mins = 0;
-			trigger_secs = 0;
-			trigger_am_pm = 0;
-		//}
-	}
-	if(alarm){
-		OCR3A = active_volume;
-		if((mode & 0x80) && !snooze){
-			clear_display();
-			string2lcd(lcd_snooze);
-			trigger_hours = hours;
-			trigger_mins = mins;
-			trigger_secs = secs + 10;
-			trigger_am_pm = am_pm;
-			//alarm_mins = (alarm_mins + 10) % 60;
-			alarm = FALSE;
-			OCR3A = idle_volume;
-			armed = 2;
-			mode &= ~(1<< SNOOZE);
-		}
-		if(mode & 0x40){
-			clear_display();
-			alarm = FALSE;
-			OCR3A = idle_volume;
-			mode ^= (0x40);
-		}
-	}
-	
-
-	//*****display count*****//
-	if(count > 1023){count = 0;}						//keep in range 0-1023
-	if(count < 0){count = 1023;}						//keep in range 0-1023
-	//segsum(count);								    //load display array
-	//segsumTime();                                       //load display array with time
-    if(digitCount == 6){digitCount= 0;}					//reset digit count to zero
-	DDRA = 0xFF;										//PORTA output mode
-    _delay_us(5);
-	PORTA = dec_to_7seg[segment_data[digitCount]];		//send 7 segment code to LED segments
-	PORTB = (0 << PWM) | (digitCount << 4);				//send PORTB the digit to display
-	digitCount++;										//update digit to display
-
-  }//while
-}//main
+void initTimers(){
+    //Timer Int vectors used: TIMER0_OVF, TIMER1_OVF
+    TIMSK |= (1<<TOIE0) | (1<<TOIE1);   	//enable interrupts
+    //Input control: normal mode, ext osc, no prescale
+    ASSR  |= (1<<AS0);                  	//use ext oscillator
+    TCCR0 |= (1<<CS00);  	            	//normal mode, no prescale
+    //Brightness control: fast PWM, 1024 prescale, ouput on OC2
+    TCCR2 |= (1<<WGM21) | (1<<WGM20) | (1<<COM21) | (1<<COM20) | (1<<CS20) | (1<<CS22);   //fast PWM mode, 1024 prescale
+    //Sound generation: normal mode no prescale, flip PE3 on OVF interrupt
+    TCCR1A = 0x00;                  					//normal mode
+    TCCR1B = (1<<CS10); 	        					//use no prescale clk/1
+    TCCR1C = 0x00;                  					//no force compare
+    //Volume control: fast pwm, set on match, clear at top, ICR1 holds TOP 
+    TCCR3A |= (1<<COM3A1) | (1<<COM3A0) | (1<<WGM31);   //use ICR1 as source for TOP, use clk/1
+    TCCR3B |= (1<<WGM33) | (1<< WGM32) | (1<<CS30); 	//no forced compare 
+    TCCR3C = 0x00;                                    	//
+    ICR3  = 0x00FF; 									//clear at 0x00FF
+}
