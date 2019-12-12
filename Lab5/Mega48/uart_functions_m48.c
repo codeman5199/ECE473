@@ -10,7 +10,7 @@
 
 //F_CPU is set in makefile, don't set it here.
 
-#define USART_BAUDRATE 9600  
+#define USART_BAUDRATE 18000  
 #define BAUDVALUE  ((F_CPU/(USART_BAUDRATE * 16UL)) - 1 )
 
 #include <string.h>

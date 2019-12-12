@@ -19,6 +19,8 @@
 #define ARMALARM	3
 #define SNOOZE		7
 #define TEMP_CMD	'r'
+#include <stdlib.h>
+#include <string.h>
 #include <avr/io.h>
 #include <avr/interrupt.h>
 #include <util/delay.h>
@@ -439,14 +441,18 @@ ISR(TIMER1_OVF_vect){
     if(1){PORTD ^= (1<<PD4);}
 }
 
-ISR(USART_RX_VECT){
-    rx_buf = UDR0;
-	if(rx_buf == '.'){
+ISR(USART0_RX_vect){
+    static uint8_t rx_count = 0;
+	rx_buf = UDR0;
+	if(rx_buf == 'C'){
+		lcd_temp_remote[rx_count] = rx_buf;
 		rx_count = 0;
 	}
 	else{
-		lcd_temp_remote[rx_count] = rx_buff;
+		lcd_temp_remote[rx_count] = rx_buf;
+		rx_count++;
 	}
+	//write_bargraph(0xFF);
 }
 
 //******************************************************************************
@@ -471,6 +477,7 @@ ISR(TIMER0_OVF_vect){
 			updateTime();
             segsumTime();
             temp_flag = 1;
+			//uart_putc('r');
             secsCount = 0;
         }
     }
@@ -579,11 +586,12 @@ while(1){
 		lm73_temp_convert(lcd_temp_local, tempval, 0);//read local temperature
         //update lcd
         string2lcd(lcd_temp_local);
-        set_cursor(2, 5);
+        set_cursor(2, 6);
         string2lcd(lcd_temp_remote);
 		//send command for remote temperature
-		uart_putc(TEMP_CMD);
+		
         temp_flag = 0;
+		uart_putc('r');
     }
 	//*****brightness control*****//
 	/*
