@@ -12,21 +12,45 @@
 #define BTTN_EN		7			//decoder pin cpnnected to enable of tristate buffer
 #define DISABLE		5			//unused decoder value for disabling
 #define SH_LD		6			//SH/LD pin 6 on PORTE
-#define CLK_INH		7			//CLK_INH pin 7 on PORTE
+#define CLK_INH		5			//CLK_INH pin 5 on PORTE
 #define SETMINS		0
 #define	SETHOURS	1
 #define DISP_TOGGLE	2
 #define ARMALARM	3
 #define SNOOZE		7
 #define TEMP_CMD	'r'
+#define DISP_RADIO	4
+#define STATION1	9990
+#define STATION2	9910
+#define STATION3	9570
+#define STATION4	9450
 #include <stdlib.h>
 #include <string.h>
 #include <avr/io.h>
 #include <avr/interrupt.h>
 #include <util/delay.h>
+#include <math.h>
 #include "hd44780.h"
 #include "lm73_functions.h"
 #include "uart_functions.h"
+#include "si4734.h"
+
+
+extern enum radio_band{FM, AM, SW};
+extern volatile uint8_t STC_interrupt;
+
+volatile enum radio_band current_radio_band = FM;
+
+uint16_t eeprom_fm_freq;
+uint16_t eeprom_am_freq;
+uint16_t eeprom_sw_freq;
+uint8_t  eeprom_volume;
+
+volatile uint16_t current_fm_freq = 9990;
+volatile uint16_t current_am_freq;
+volatile uint16_t current_sw_freq;
+uint8_t  current_volume;
+
 
 uint8_t quad1_prev = 0;				//state values for encoders 1 and 2
 uint8_t quad1_current = 0;			//
@@ -51,6 +75,9 @@ uint8_t idle_volume = 0xF0;			//idle volume
 uint8_t temp_flag;
 char rx_buf;
 uint8_t rx_count = 0;
+uint16_t radio_freq = 9990;
+uint16_t prev_fm_freq = 9990;
+uint8_t radio_state = 0;
 
 
 char lcd_armed[16] = {'A', 'R', 'M', 'E', 'D', ' '};  //holds string to send to lcd 
@@ -73,7 +100,7 @@ static uint8_t button_read = 0;
 uint8_t segment_data[5]; 
 
 //decimal to 7-segment LED display encodings, logic "0" turns on segment
-uint8_t dec_to_7seg[14] ={
+uint8_t dec_to_7seg[24] ={
 0b11000000,		//0
 0b11111001,		//1
 0b10100100,		//2
@@ -88,6 +115,16 @@ uint8_t dec_to_7seg[14] ={
 0b11111100,     //11 or colon on (AM)
 0b11111000,     //12 or colon on (PM)
 0b11111011, 	//13 or blank (PM)
+0b01000000,		//0.
+0b01111001,		//1.
+0b00100100,		//2.
+0b00110000,		//3.
+0b00011001,		//4.
+0b00010010,		//5.
+0b00000010,		//6.
+0b01111000,		//7.
+0b00000000,		//8.
+0b00011000,		//9.
 };
 
 
@@ -165,7 +202,7 @@ void segsum(uint16_t sum) {
 	segment_data[4] = thousands;
 	segment_data[3] = hundreds;
 	segment_data[2] = BLANK;
-	segment_data[1] = tens;
+	segment_data[1] = tens + 14;
 	segment_data[0] = ones;
   //blank out leading zero digits stored valule 10 = blank
 	if(numDigits < 4){segment_data[4] = BLANK;} 
@@ -222,6 +259,16 @@ void segsumAlarm(){
 	segment_data[1] = alarm_mins/10;
 	segment_data[0] = alarm_mins%10;
 }
+
+/*
+void segsumFreq(){
+    //store values in correct indexes
+	segment_data[4] = radio_freq/1000;
+	segment_data[3] = (radio_freq%1000)/100;
+    segment_data[2] = BLANK//COLON_ON + alarm_am_pm;
+	segment_data[1] = (radio_freq%100)/10;
+	segment_data[0] = radio_freq%1000;
+}*/
 
 //***********************************************************************************
 
@@ -366,6 +413,11 @@ void incSetTime(){
                 alarm_hours = 1;
             }
 			break;
+		case (1<<DISP_RADIO):
+			if(radio_freq != 10790){
+				radio_freq = radio_freq + 20;
+			}
+			break;
 	}
 }
 
@@ -403,6 +455,11 @@ void decSetTime(){
             }
 			alarm_hours--;				//decrement minutes
 			break;
+		case (1<<DISP_RADIO):
+			if(radio_freq != 8810){
+				radio_freq = radio_freq - 20;
+			}
+			break;
 	}
 }
 
@@ -427,10 +484,20 @@ void incdec_vol(uint8_t dir){
 	}
 }
 
-void updateTempDisplay(){
-    for(int i = 0; i < 8; i++){
+void radio_start(){
+	PORTE &= ~(1<<PE7); //int2 initially low to sense TWI mode
+	DDRE  |= 0x80;      //turn on Port E bit 7 to drive it low
+	PORTE |=  (1<<PE2); //hardware reset Si4734 
+	_delay_us(200);     //hold for 200us, 100us by spec         
+	PORTE &= ~(1<<PE2); //release reset 
+	_delay_us(30);      //5us required because of my slow I2C translators I suspect
+	//Si code in "low" has 30us delay...no explaination
+	DDRE  &= ~(0x80);   //now Port E bit 7 becomes input from the radio interrupt
 
-    }
+	fm_pwr_up(); //powerup the radio as appropriate
+	current_fm_freq = radio_freq; //arg2, arg3: 99.9Mhz, 200khz steps
+	fm_tune_freq(); //tune radio to frequency in current_fm_freq
+	OCR3A = active_volume;
 }
 
 //******************************************************************************
@@ -438,7 +505,11 @@ void updateTempDisplay(){
 //ISR outputs sound if alarm is enabled to PD4. Sound is 5Vpp
 //
 ISR(TIMER1_OVF_vect){
-    if(1){PORTD ^= (1<<PD4);}
+    if(alarm){PORTD ^= (1<<PD4);}
+}
+
+ISR(INT7_vect){
+	STC_interrupt = TRUE;
 }
 
 ISR(USART0_RX_vect){
@@ -491,6 +562,43 @@ ISR(TIMER0_OVF_vect){
             secsCount = 0;
         }
 	}
+	//*****radio controls*****//
+	if(!(mode & (1<<DISP_RADIO))){
+		if(radio_state == 2){
+			radio_state = 3;			//shut radio
+		}
+	}
+	if((mode & (1<<DISP_RADIO)) && !(alarm)){
+		if(radio_state == 0){
+			radio_state = 1;			//start up radio
+		}
+		segsum(radio_freq/10);
+		segment_data[1] = segment_data[1] & 0b01111111;
+		OCR3A = active_volume;
+		current_fm_freq = radio_freq; //arg2, arg3: 99.9Mhz, 200khz steps
+		//fm_tune_freq();
+		//station presets:
+	switch(mode){
+		case (1<<DISP_RADIO) | (0x01):
+			radio_freq = STATION1;
+			mode = (1<<DISP_RADIO);
+		break;
+		case (1<<DISP_RADIO) | (0x02):
+			radio_freq = STATION2;
+			mode = (1<<DISP_RADIO);
+		break;
+		case (1<<DISP_RADIO) | (0x04):
+			radio_freq = STATION3;
+			mode = (1<<DISP_RADIO);
+		break;
+		case (1<<DISP_RADIO) | (0x08):
+			radio_freq = STATION4;
+			mode = (1<<DISP_RADIO);
+		break;
+	}
+	}
+	
+
 	if((mode == (1<<ARMALARM)) && (armed != TRUE)){
 		armed = TRUE;
 	}
@@ -499,8 +607,10 @@ ISR(TIMER0_OVF_vect){
     }
 
 	//*****check inputs*****//
-	PORTE = 0b01000000;								//toggle SDLD and CLK_INH
-    SPDR = 0x00;									//write garbage over SPI
+	//PORTE = 0b11000000;							//dont clober
+	PORTE &= ~(1<<CLK_INH);							//toggle CLK_INH
+	PORTE |= (1<<SH_LD);							//toggle SDLD
+	SPDR = 0x00;									//write garbage over SPI
 	while(bit_is_clear(SPSR, SPIF)){}				//spin until transmission complete
 	quad1_prev = quad1_current;						//set previous value to current
 	quad2_prev = quad2_current;						//set previous value to current
@@ -513,7 +623,8 @@ ISR(TIMER0_OVF_vect){
 	turn = quad2Read(quad2_prev, quad2_current);	//eval state of encoder 2
 	if(turn == 1){incdec_vol(0);}					//if turning ccw, inc
 	if(turn == 2){incdec_vol(1);}					//if turning cw, dec
-	PORTE = 0b10000000;								//toggle SDLD and CLK_INH
+	//PORTE = 0b00100000;							//dont clober
+	PORTE ^= (1<<CLK_INH) | (1<<SH_LD);				//toggle SDLD and CLK_INH
 	
     //read buttons
 	if(readButton(button_read)){					//eval buttons
@@ -533,11 +644,12 @@ uint8_t main()
 {
 //*****initialization*****//
 DDRB = 0xFF;							//PORTB set all outputs (display decoder and SPI)
-DDRE = (1<<PE3)| (1<<PE6) | (1<<PE7);	//PORTE set outputs for bits 3 (Volume), 6 (SHLD), and 7 (CLK_INH)
+DDRE = (1<<PE2)|(1<<PE3)| (1<<PE6) | (1<<PE5);	//PORTE set outputs for bits 3 (Volume), 6 (SHLD), and 5 (CLK_INH)
 DDRD = (1<<PD4);						//PORTD set ouput for bit 4 (alarm sound)
 DDRF &= ~(1<<PF7);
 PORTF &= ~(1<<PF7);
 PORTE = (1<<SH_LD) | (1<<CLK_INH);		//init encoder SH/LD and CLK_INH high
+PORTE |= (1 << PE2); //radio reset is on at powerup (active high)
 //Timer Int vectors used: TIMER0_OVF, TIMER1_OVF
 TIMSK |= (1<<TOIE0) | (1<<TOIE1);   	//enable interrupts
 //Input control: normal mode, ext osc, no prescale
@@ -557,6 +669,9 @@ ICR3  = 0x00FF; 									//clear at 0x00FF
 //Brightness control: ADC single ended
 ADMUX = 0x47;				//single ended, input PF7, right adjusted, 10 bits
 ADCSRA = (1 << ADEN) | (0 << ADSC) | (1<< ADPS2) | (1 << ADPS1) | (1 <<ADPS0);
+
+EICRB |= (1<<ISC71) | (1<ISC70);
+EIMSK |= (1<<INT7);
 
 uint8_t digitCount = 0;				//tracks digit to display
 uint8_t trigger_hours = 0;
@@ -579,6 +694,11 @@ alarm_mins = 30;
 segment_data[2] = BLANK;
 OCR2 = 250;
 OCR3A = idle_volume;				//set inital volume
+DDRE  |= (1 << PE2); //Port E bit 2 is active high reset for radio 
+PORTE |= (1 << PE2); //radio reset is on at powerup (active high)
+/*radio_start();
+_delay_ms(500);
+radio_pwr_dwn();*/
 while(1){
 	if(temp_flag == 1){
 		tempval = lm73_temp_read();
@@ -636,6 +756,17 @@ while(1){
 		//}
 	}
 	if(alarm){
+		if(radio_state == 2){
+			radio_pwr_dwn();
+			radio_state = 0;
+		}
+		if(secs%2){
+			segment_data[0] = BLANK;
+			segment_data[1] = BLANK;
+			segment_data[2] = BLANK;
+			segment_data[3] = BLANK;
+			segment_data[4] = BLANK;
+		}
 		OCR3A = active_volume;
 		if((mode & 0x80) && !snooze){
 			clear_display();
@@ -657,7 +788,21 @@ while(1){
 			mode ^= (0x40);
 		}
 	}
-	
+	if(radio_state == 1){
+		radio_start();
+		_delay_ms(10);
+		radio_start();
+		radio_state=2;
+	}
+	if(radio_state == 3){
+		OCR3A = idle_volume;
+		radio_pwr_dwn();
+		radio_state=0;
+	}
+	if(!(current_fm_freq == prev_fm_freq)){
+		fm_tune_freq();
+		prev_fm_freq = current_fm_freq;
+	}
 
 	//*****display count*****//
 	if(count > 1023){count = 0;}						//keep in range 0-1023

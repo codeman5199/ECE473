@@ -1,5 +1,5 @@
 PRG            =lab6
-HLPRS		   =lm73_functions.o uart_functions.o twi_master.o  hd44780.o
+HLPRS		   =lm73_functions.o uart_functions.o twi_master.o  hd44780.o si4734.o
 OBJ            = $(PRG).o $(HLPRS)
 
 MCU_TARGET     = atmega128
