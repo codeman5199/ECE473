@@ -2,14 +2,12 @@
 
 Code repository for Microcontroller System Design Class
 
-Lab2:
-
+## Lab2
 -impliment software button debounce
 
 -interact with seven segment display to display count by multiplexing each digit
 
-Lab3:
-
+## Lab3
 -allow user to increment displayed count by turning quadrature encoder
 
 -impliment quadrature decode driver
@@ -18,8 +16,7 @@ Lab3:
 
 -display output of shift register on LEDs
 
-Lab4:
-
+## Lab4:
 -add software clock for timekeeping
 
 -add time/alarm set, arm, and snooze functionality
@@ -32,7 +29,7 @@ Lab4:
 
 -design and build analog circuitry to play alarm tone on small speakers
 
-Lab5:
+## Lab5:
 
 -program second uC to act as remote temperature sensor
 
@@ -42,7 +39,7 @@ Lab5:
 
 -display temperature information on LCD screen using SPI
 
-Lab6:
+## Lab6:
 
 -put everything together!
 
